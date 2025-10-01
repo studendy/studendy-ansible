@@ -1,0 +1,6 @@
+- name: Deploy Studendy from local script
+  hosts: vps
+  become: true   # escalate privilege secara global
+  tasks:
+    - name: Run advanced-deploy.sh from local
+      ansible.builtin.script: ./advanced-deploy.sh
