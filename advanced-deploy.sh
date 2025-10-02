@@ -87,10 +87,14 @@ else
 fi
 
 echo "📤 Syncing source working tree to new release"
+# Avoid recursion when REPO_DIR is the base that contains releases/shared/current
 rsync -a --delete \
   --exclude='storage' \
   --exclude='node_modules' \
   --exclude='.env' \
+  --exclude='releases' \
+  --exclude='shared' \
+  --exclude='current' \
   "${REPO_DIR}/" "${NEW_RELEASE}/"
 
 echo "🔄 Updating git to origin/${BRANCH}"
