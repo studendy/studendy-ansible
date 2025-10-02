@@ -64,6 +64,45 @@
         chosen_backup: "{{ (local_archives.files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
       when: (local_backup_file | default('')) | length == 0
 
+    - name: Find local backup directories (fallback to dir -> tar.gz)
+      ansible.builtin.find:
+        paths: "{{ local_backup_dir }}"
+        patterns: "studendy_*"
+        file_type: directory
+      register: local_backup_dirs
+      delegate_to: localhost
+      become: false
+      when:
+        - chosen_backup | length == 0
+        - (local_backup_file | default('')) | length == 0
+        - (not local_dir_stat.stat.exists) or (local_dir_stat.stat.isdir)
+
+    - name: Create tar.gz from latest local backup directory
+      ansible.builtin.shell: |
+        set -e
+        dirpath="{{ (local_backup_dirs.files | sort(attribute='mtime', reverse=True) | first).path }}"
+        base="$(basename "$dirpath")"
+        out="/tmp/${base}.tar.gz"
+        tar -czf "$out" -C "{{ local_backup_dir }}" "$base"
+        echo "$out"
+      args:
+        executable: /bin/bash
+      register: created_local_archive
+      delegate_to: localhost
+      become: false
+      when:
+        - chosen_backup | length == 0
+        - (local_backup_dirs.files | default([]) | length) > 0
+      changed_when: true
+
+    - name: Use created local archive
+      ansible.builtin.set_fact:
+        chosen_backup: "{{ created_local_archive.stdout }}"
+      when:
+        - chosen_backup | length == 0
+        - created_local_archive is defined
+        - (created_local_archive.stdout | default('')) | length > 0
+
     - name: Validate provided local backup file
       ansible.builtin.stat:
         path: "{{ local_backup_file }}"
@@ -120,6 +159,43 @@
         chosen_backup: "{{ (semaphore_archives_files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
       when: chosen_backup | length == 0 and (semaphore_archives_files | length) > 0
 
+    - name: Find backup directories inside discovered backup dirs (fallback dir -> tar.gz)
+      ansible.builtin.find:
+        paths: "{{ semaphore_backup_dirs_list | map(attribute='path') | list }}"
+        patterns: "studendy_*"
+        file_type: directory
+      register: semaphore_backup_subdirs
+      delegate_to: localhost
+      become: false
+      when: chosen_backup | length == 0 and (semaphore_backup_dirs_list | length) > 0
+
+    - name: Create tar.gz from latest discovered backup directory
+      ansible.builtin.shell: |
+        set -e
+        dirpath="{{ (semaphore_backup_subdirs.files | sort(attribute='mtime', reverse=True) | first).path }}"
+        parent="$(dirname "$dirpath")"
+        base="$(basename "$dirpath")"
+        out="/tmp/${base}.tar.gz"
+        tar -czf "$out" -C "$parent" "$base"
+        echo "$out"
+      args:
+        executable: /bin/bash
+      register: created_discovered_archive
+      delegate_to: localhost
+      become: false
+      when:
+        - chosen_backup | length == 0
+        - (semaphore_backup_subdirs.files | default([]) | length) > 0
+      changed_when: true
+
+    - name: Use created discovered archive
+      ansible.builtin.set_fact:
+        chosen_backup: "{{ created_discovered_archive.stdout }}"
+      when:
+        - chosen_backup | length == 0
+        - created_discovered_archive is defined
+        - (created_discovered_archive.stdout | default('')) | length > 0
+
     - name: Find any .tar.gz under /tmp/semaphore/project_1 (last resort)
       ansible.builtin.find:
         paths: 
@@ -142,6 +218,44 @@
       ansible.builtin.set_fact:
         chosen_backup: "{{ (semaphore_any_archives_files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
       when: chosen_backup | length == 0 and (semaphore_any_archives_files | length) > 0
+
+    - name: Find any backup directories under /tmp/semaphore/project_1 (last resort dir -> tar.gz)
+      ansible.builtin.find:
+        paths:
+          - "/tmp/semaphore/project_1"
+        patterns: "studendy_*"
+        file_type: directory
+      register: semaphore_any_dirs
+      delegate_to: localhost
+      become: false
+      when: chosen_backup | length == 0
+
+    - name: Create tar.gz from any latest backup directory (last resort)
+      ansible.builtin.shell: |
+        set -e
+        dirpath="{{ (semaphore_any_dirs.files | sort(attribute='mtime', reverse=True) | first).path }}"
+        parent="$(dirname "$dirpath")"
+        base="$(basename "$dirpath")"
+        out="/tmp/${base}.tar.gz"
+        tar -czf "$out" -C "$parent" "$base"
+        echo "$out"
+      args:
+        executable: /bin/bash
+      register: created_any_archive
+      delegate_to: localhost
+      become: false
+      when:
+        - chosen_backup | length == 0
+        - (semaphore_any_dirs.files | default([]) | length) > 0
+      changed_when: true
+
+    - name: Use created last-resort archive
+      ansible.builtin.set_fact:
+        chosen_backup: "{{ created_any_archive.stdout }}"
+      when:
+        - chosen_backup | length == 0
+        - created_any_archive is defined
+        - (created_any_archive.stdout | default('')) | length > 0
 
     - name: Fail if no backup found in local folder
       ansible.builtin.fail:
