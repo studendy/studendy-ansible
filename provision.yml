@@ -22,6 +22,12 @@
     # No variables needed for backup; we will auto-pick latest .tar.gz
 
   tasks:
+    - name: Check local_backup_dir path type (dir/file)
+      ansible.builtin.stat:
+        path: "{{ local_backup_dir }}"
+      register: local_dir_stat
+      delegate_to: localhost
+      become: false
     - name: Ensure local backup directory exists
       ansible.builtin.file:
         path: "{{ local_backup_dir }}"
@@ -29,7 +35,9 @@
         mode: "0755"
       delegate_to: localhost
       become: false
-      when: (local_backup_file | default('')) | length == 0
+      when:
+        - (local_backup_file | default('')) | length == 0
+        - not (local_dir_stat.stat.exists and (not local_dir_stat.stat.isdir))
 
     - name: Find local backups (*.tar.gz)
       ansible.builtin.find:
@@ -39,7 +47,17 @@
       register: local_archives
       delegate_to: localhost
       become: false
-      when: (local_backup_file | default('')) | length == 0
+      when:
+        - (local_backup_file | default('')) | length == 0
+        - (not local_dir_stat.stat.exists) or (local_dir_stat.stat.isdir)
+
+    - name: Use local path if it's a file
+      ansible.builtin.set_fact:
+        chosen_backup: "{{ local_backup_dir }}"
+      when:
+        - (local_backup_file | default('')) | length == 0
+        - local_dir_stat.stat.exists
+        - not local_dir_stat.stat.isdir
 
     - name: Pick latest local backup (from directory)
       ansible.builtin.set_fact:
