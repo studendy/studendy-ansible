@@ -13,8 +13,9 @@
     repo_url: "https://github.com/studendy/Studendy.com.git"
     branch: "main"
 
-    # Always pick backup from this local folder (Mac)
-    local_backup_dir: "/Users/muhammadalitopan/Downloads/backups"
+    # Local backup folder (relative to repo in Semaphore/CI)
+    # Use `-e local_backup_dir=/path` to override when needed.
+    local_backup_dir: "{{ playbook_dir }}/backups"
     # No variables needed for backup; we will auto-pick latest .tar.gz
 
   tasks:
