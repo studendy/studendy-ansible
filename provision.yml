@@ -95,20 +95,30 @@
       become: false
       when: chosen_backup | length == 0
 
+    - name: Prepare list of discovered backup dirs
+      ansible.builtin.set_fact:
+        semaphore_backup_dirs_list: "{{ semaphore_backup_dirs.files | default([]) }}"
+      when: chosen_backup | length == 0
+
     - name: Find .tar.gz inside discovered backup directories (fallback)
       ansible.builtin.find:
-        paths: "{{ semaphore_backup_dirs.files | map(attribute='path') | list }}"
+        paths: "{{ semaphore_backup_dirs_list | map(attribute='path') | list }}"
         patterns: "*.tar.gz"
         file_type: file
       register: semaphore_archives
       delegate_to: localhost
       become: false
-      when: chosen_backup | length == 0 and (semaphore_backup_dirs.files | length) > 0
+      when: chosen_backup | length == 0 and (semaphore_backup_dirs_list | length) > 0
+
+    - name: Prepare list of discovered archives
+      ansible.builtin.set_fact:
+        semaphore_archives_files: "{{ (semaphore_archives | default({})).files | default([]) }}"
+      when: chosen_backup | length == 0
 
     - name: Pick latest from discovered archives (fallback)
       ansible.builtin.set_fact:
-        chosen_backup: "{{ ((semaphore_archives | default({'files': []})).files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
-      when: chosen_backup | length == 0 and (((semaphore_archives | default({'files': []})).files | length) > 0)
+        chosen_backup: "{{ (semaphore_archives_files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
+      when: chosen_backup | length == 0 and (semaphore_archives_files | length) > 0
 
     - name: Find any .tar.gz under /tmp/semaphore/project_1 (last resort)
       ansible.builtin.find:
@@ -121,15 +131,17 @@
       become: false
       when:
         - chosen_backup | length == 0
-        - (semaphore_backup_dirs.files | default([]) | length) == 0
+        - (semaphore_backup_dirs_list | default([]) | length) == 0
+
+    - name: Prepare list of any discovered archives
+      ansible.builtin.set_fact:
+        semaphore_any_archives_files: "{{ (semaphore_any_archives | default({})).files | default([]) }}"
+      when: chosen_backup | length == 0
 
     - name: Pick latest from any discovered archives (last resort)
       ansible.builtin.set_fact:
-        chosen_backup: "{{ (semaphore_any_archives.files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
-      when:
-        - chosen_backup | length == 0
-        - semaphore_any_archives is defined
-        - (semaphore_any_archives.files | length) > 0
+        chosen_backup: "{{ (semaphore_any_archives_files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
+      when: chosen_backup | length == 0 and (semaphore_any_archives_files | length) > 0
 
     - name: Fail if no backup found in local folder
       ansible.builtin.fail:
