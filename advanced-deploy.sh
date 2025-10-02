@@ -124,6 +124,14 @@ fi
 rm -rf "${NEW_RELEASE}/storage"
 ln -sfn "${SHARED_DIR}/storage" "${NEW_RELEASE}/storage"
 
+# Ensure required Laravel storage subdirectories exist for artisan/composer scripts
+mkdir -p \
+  "${SHARED_DIR}/storage/framework" \
+  "${SHARED_DIR}/storage/framework/cache" \
+  "${SHARED_DIR}/storage/framework/sessions" \
+  "${SHARED_DIR}/storage/framework/views" \
+  "${SHARED_DIR}/storage/logs"
+
 # === Install dependencies ===
 echo "📚 Installing Composer dependencies (prod)"
 COMPOSER_ALLOW_SUPERUSER=1 composer --working-dir="${NEW_RELEASE}" install \
