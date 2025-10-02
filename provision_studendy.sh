@@ -23,6 +23,7 @@ DB_PASS="secure_password"
 # Optional: path to backup bundle (tar.gz or extracted dir) to auto-import DB settings
 # Example: BACKUP_BUNDLE=/root/studendy_20251001_123000.tar.gz
 BACKUP_BUNDLE=""
+RESTORE_MODE="${RESTORE_MODE:-0}"
 
 # Optional: Node.js major version
 NODE_MAJOR="18"
@@ -144,13 +145,22 @@ ok "Database ${DB_NAME} and user ${DB_USER} ready"
 log "Preparing application directory at ${APP_DIR}"
 mkdir -p "${APP_DIR}"
 
-if [ -d "${APP_DIR}/.git" ]; then
-  log "Repository exists. Pulling latest ${BRANCH}"
-  git -C "${APP_DIR}" fetch origin "${BRANCH}"
-  git -C "${APP_DIR}" reset --hard "origin/${BRANCH}"
+if [ "${RESTORE_MODE}" -eq 1 ] && [ -n "${BACKUP_BUNDLE}" ] && [ -d "${TMP_BUNDLE_DIR}" ]; then
+  log "RESTORE_MODE enabled: restoring app files from backup"
+  rsync -a --delete \
+    --exclude='db.sql' \
+    --exclude='nginx' \
+    --exclude='php-fpm' \
+    "${TMP_BUNDLE_DIR}/" "${APP_DIR}/"
 else
-  log "Cloning repository"
-  git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_DIR}"
+  if [ -d "${APP_DIR}/.git" ]; then
+    log "Repository exists. Pulling latest ${BRANCH}"
+    git -C "${APP_DIR}" fetch origin "${BRANCH}"
+    git -C "${APP_DIR}" reset --hard "origin/${BRANCH}"
+  else
+    log "Cloning repository"
+    git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_DIR}"
+  fi
 fi
 
 log "Installing PHP dependencies"
@@ -189,8 +199,15 @@ sed -i "s#^DB_PASSWORD=.*#DB_PASSWORD=${DB_PASS}#" "${APP_DIR}/.env" || true
 php "${APP_DIR}/artisan" key:generate --force || true
 php "${APP_DIR}/artisan" storage:link || true
 
+if [ "${RESTORE_MODE}" -eq 1 ] && [ -n "${BACKUP_BUNDLE}" ] && [ -d "${TMP_BUNDLE_DIR}" ] && [ -s "${TMP_BUNDLE_DIR}/db.sql" ]; then
+  log "Importing database from backup dump"
+  mysql "${DB_NAME}" < "${TMP_BUNDLE_DIR}/db.sql" || warn "DB import failed; verify credentials and dump"
+else
+  warn "No db.sql found for import or RESTORE_MODE disabled; skipping DB import"
+fi
+
 log "Running database migrations and optimizing"
-php "${APP_DIR}/artisan" migrate --force
+php "${APP_DIR}/artisan" migrate --force || true
 php "${APP_DIR}/artisan" config:cache
 php "${APP_DIR}/artisan" route:cache
 php "${APP_DIR}/artisan" view:cache || true
@@ -200,6 +217,15 @@ php "${APP_DIR}/artisan" optimize
 #         NGINX CONFIGURATION          #
 ########################################
 log "Configuring Nginx vhost for ${DOMAIN}"
+
+RESTORED_NGINX=0
+if [ "${RESTORE_MODE}" -eq 1 ] && [ -n "${BACKUP_BUNDLE}" ] && [ -d "${TMP_BUNDLE_DIR}/nginx" ]; then
+  log "Restoring nginx configs from backup"
+  rsync -a "${TMP_BUNDLE_DIR}/nginx/" /etc/nginx/sites-available/
+  RESTORED_NGINX=1
+fi
+
+if [ "${RESTORED_NGINX}" -eq 0 ]; then
 cat >/etc/nginx/sites-available/studendy <<NGINX
 server {
     listen 80;
@@ -229,6 +255,7 @@ server {
     }
 }
 NGINX
+fi
 
 ln -sf /etc/nginx/sites-available/studendy /etc/nginx/sites-enabled/studendy
 rm -f /etc/nginx/sites-enabled/default || true

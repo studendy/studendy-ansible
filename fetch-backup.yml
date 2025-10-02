@@ -1,0 +1,92 @@
+- name: Fetch latest Studendy backup from remote
+  hosts: vps
+  become: true
+  vars:
+    remote_backup_dir: "/var/www/html/backups"
+    local_backup_dir: "./backups"
+  tasks:
+    - name: Ensure local backup directory exists
+      ansible.builtin.file:
+        path: "{{ local_backup_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Find existing backup archives (*.tar.gz)
+      ansible.builtin.find:
+        paths: "{{ remote_backup_dir }}"
+        patterns: "studendy_*.tar.gz"
+        file_type: file
+      register: backup_archives
+
+    - name: Determine latest archive path (if any)
+      ansible.builtin.set_fact:
+        latest_archive: "{{ (backup_archives.files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
+
+    - name: If no archive exists, find latest backup directory
+      ansible.builtin.find:
+        paths: "{{ remote_backup_dir }}"
+        patterns: "studendy_*"
+        file_type: directory
+      register: backup_dirs
+      when: latest_archive | length == 0
+
+    - name: Determine latest directory name (if needed)
+      ansible.builtin.set_fact:
+        latest_dir: "{{ (backup_dirs.files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
+      when: latest_archive | length == 0
+
+    - name: Create tar.gz from latest directory on remote (fallback)
+      ansible.builtin.shell: |
+        set -e
+        dirpath="{{ latest_dir }}"
+        [ -n "$dirpath" ] || { echo "No backup directory found" >&2; exit 1; }
+        base="$(basename "$dirpath")"
+        out="/tmp/${base}.tar.gz"
+        tar -czf "$out" -C "{{ remote_backup_dir }}" "$base"
+        echo "$out"
+      args:
+        executable: /bin/bash
+      register: created_archive
+      when: latest_archive | length == 0
+      changed_when: true
+
+    - name: Pick final archive path
+      ansible.builtin.set_fact:
+        final_archive: "{{ latest_archive if (latest_archive | length > 0) else created_archive.stdout }}"
+
+    - name: Show chosen archive
+      ansible.builtin.debug:
+        msg: "Fetching backup archive: {{ final_archive }}"
+
+    - name: Compute remote SHA256
+      ansible.builtin.shell: "sha256sum {{ final_archive }} | awk '{print $1}'"
+      register: remote_sha
+      changed_when: false
+
+    - name: Fetch archive to local machine
+      ansible.builtin.fetch:
+        src: "{{ final_archive }}"
+        dest: "{{ local_backup_dir }}/"
+        flat: true
+
+    - name: Compute local SHA256
+      ansible.builtin.shell: "sha256sum {{ local_backup_dir }}/{{ final_archive | basename }} | awk '{print $1}'"
+      register: local_sha
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Verify checksum matches
+      ansible.builtin.assert:
+        that:
+          - remote_sha.stdout is defined
+          - local_sha.stdout is defined
+          - remote_sha.stdout == local_sha.stdout
+        fail_msg: "Checksum mismatch between remote and local backup"
+        success_msg: "Backup integrity verified (SHA256 match)"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "Saved to: {{ local_backup_dir }}/{{ final_archive | basename }}"
+          - "SHA256: {{ local_sha.stdout }}"
