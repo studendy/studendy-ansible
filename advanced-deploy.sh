@@ -8,6 +8,13 @@ DATE="$(date +%Y%m%d_%H%M%S)"
 HEALTH_URL="https://studendy.com/"
 BRANCH="main"
 
+# Optional DB backup config (override via env). If not set, try reading from .env
+DB_NAME="${DB_NAME:-}"
+DB_USER="${DB_USER:-}"
+DB_PASS="${DB_PASS:-}"
+DB_HOST="${DB_HOST:-}"
+DB_PORT="${DB_PORT:-}"
+
 echo "🚀 Starting production deployment..."
 echo "📅 Date: $(date)"
 echo "📍 Path: ${APP_PATH}"
@@ -28,9 +35,14 @@ rollback() {
     php "${APP_PATH}/artisan" up 2>/dev/null || true
 
     if [ -d "${BACKUP_PATH}/studendy_${DATE}" ]; then
-        cd / || true
-        rm -rf "${APP_PATH}"
-        mv "${BACKUP_PATH}/studendy_${DATE}" "${APP_PATH}"
+        echo "📦 Restoring application files from backup..."
+        mkdir -p "${APP_PATH}"
+        rsync -a --delete \
+            --exclude='node_modules' \
+            --exclude='db.sql' \
+            --exclude='nginx' \
+            --exclude='php-fpm' \
+            "${BACKUP_PATH}/studendy_${DATE}/" "${APP_PATH}/"
 
         if [ ! -d "${APP_PATH}/vendor" ]; then
             echo "📚 Restoring vendor..."
@@ -53,6 +65,48 @@ php artisan down --render="errors::503" --retry=60
 
 rsync -a --delete --exclude='node_modules' \
     "${APP_PATH}/" "${BACKUP_PATH}/studendy_${DATE}/"
+
+# Attempt to hydrate DB config from Laravel .env if not provided by env
+if [ -f "${APP_PATH}/.env" ]; then
+    [ -z "${DB_NAME}" ] && DB_NAME="$(grep -E '^DB_DATABASE=' "${APP_PATH}/.env" | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+    [ -z "${DB_USER}" ] && DB_USER="$(grep -E '^DB_USERNAME=' "${APP_PATH}/.env" | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+    [ -z "${DB_PASS}" ] && DB_PASS="$(grep -E '^DB_PASSWORD=' "${APP_PATH}/.env" | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+    [ -z "${DB_HOST}" ] && DB_HOST="$(grep -E '^DB_HOST=' "${APP_PATH}/.env" | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+    [ -z "${DB_PORT}" ] && DB_PORT="$(grep -E '^DB_PORT=' "${APP_PATH}/.env" | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+fi
+
+# Step 2b: Backup database (optional)
+if command -v mysqldump >/dev/null 2>&1; then
+    echo "🗄️ Dumping database..."
+    DB_DUMP_PATH="${BACKUP_PATH}/studendy_${DATE}/db.sql"
+    MYSQL_HOST_OPTS=()
+    [ -n "${DB_HOST}" ] && MYSQL_HOST_OPTS+=( -h "${DB_HOST}" )
+    [ -n "${DB_PORT}" ] && MYSQL_HOST_OPTS+=( -P "${DB_PORT}" )
+    MYSQL_AUTH_OPTS=( -u "${DB_USER:-root}" )
+    [ -n "${DB_PASS}" ] && MYSQL_AUTH_OPTS+=( --password="${DB_PASS}" )
+    if [ -n "${DB_NAME}" ]; then
+        mysqldump "${MYSQL_HOST_OPTS[@]}" "${MYSQL_AUTH_OPTS[@]}" "${DB_NAME}" > "${DB_DUMP_PATH}" || echo "⚠️ Database backup failed"
+    else
+        echo "ℹ️ DB_NAME not set and not found in .env, skipping DB backup"
+    fi
+    [ -s "${DB_DUMP_PATH}" ] && echo "✅ Database backup created" || echo "⚠️ Empty or missing DB dump"
+else
+    echo "ℹ️ mysqldump not found, skipping database backup"
+fi
+
+# Step 2c: Backup nginx and php-fpm configs
+echo "🛠️ Backing up nginx & php-fpm configs..."
+mkdir -p "${BACKUP_PATH}/studendy_${DATE}/nginx" "${BACKUP_PATH}/studendy_${DATE}/php-fpm"
+rsync -a /etc/nginx/sites-enabled/ "${BACKUP_PATH}/studendy_${DATE}/nginx/" 2>/dev/null || echo "ℹ️ Skipped nginx configs (permission or path)"
+rsync -a /etc/php/8.2/fpm/pool.d/ "${BACKUP_PATH}/studendy_${DATE}/php-fpm/" 2>/dev/null || echo "ℹ️ Skipped php-fpm configs (permission or path)"
+
+# Step 2d: Create compressed archive for easy migration
+if command -v tar >/dev/null 2>&1; then
+    echo "🗜️ Creating backup archive..."
+    (cd "${BACKUP_PATH}" && tar -czf "studendy_${DATE}.tar.gz" "studendy_${DATE}") && echo "✅ Archive created at ${BACKUP_PATH}/studendy_${DATE}.tar.gz"
+else
+    echo "ℹ️ tar not found, skipping archive creation"
+fi
 
 git fetch origin "${BRANCH}"
 git reset --hard "origin/${BRANCH}"
