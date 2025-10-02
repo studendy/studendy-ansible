@@ -84,6 +84,32 @@
       ansible.builtin.debug:
         msg: "Chosen backup: {{ chosen_backup | default('') }}"
 
+    - name: Discover Semaphore backup directories (fallback)
+      ansible.builtin.find:
+        paths: 
+          - "/tmp/semaphore/project_1"
+        patterns: "backups"
+        file_type: directory
+      register: semaphore_backup_dirs
+      delegate_to: localhost
+      become: false
+      when: chosen_backup | length == 0
+
+    - name: Find .tar.gz inside discovered backup directories (fallback)
+      ansible.builtin.find:
+        paths: "{{ semaphore_backup_dirs.files | map(attribute='path') | list }}"
+        patterns: "*.tar.gz"
+        file_type: file
+      register: semaphore_archives
+      delegate_to: localhost
+      become: false
+      when: chosen_backup | length == 0 and (semaphore_backup_dirs.files | length) > 0
+
+    - name: Pick latest from discovered archives (fallback)
+      ansible.builtin.set_fact:
+        chosen_backup: "{{ (semaphore_archives.files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
+      when: chosen_backup | length == 0 and (semaphore_archives.files | length) > 0
+
     - name: Fail if no backup found in local folder
       ansible.builtin.fail:
         msg: >-
