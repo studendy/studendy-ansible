@@ -11,6 +11,7 @@
         state: directory
         mode: "0755"
       delegate_to: localhost
+      become: false
 
     - name: Find existing backup archives (*.tar.gz)
       ansible.builtin.find:
@@ -75,6 +76,7 @@
       register: local_sha
       changed_when: false
       delegate_to: localhost
+      become: false
 
     - name: Verify checksum matches
       ansible.builtin.assert:
