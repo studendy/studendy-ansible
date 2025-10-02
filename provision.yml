@@ -22,6 +22,32 @@
     # No variables needed for backup; we will auto-pick latest .tar.gz
 
   tasks:
+    - name: Check for mounted backups at /mnt/backups
+      ansible.builtin.stat:
+        path: "/mnt/backups"
+      register: mnt_backups_stat
+      delegate_to: localhost
+      become: false
+
+    - name: Prefer latest backup from /mnt/backups when available
+      ansible.builtin.find:
+        paths: "/mnt/backups"
+        patterns: "*.tar.gz"
+        file_type: file
+      register: mnt_backups_archives
+      delegate_to: localhost
+      become: false
+      when:
+        - chosen_backup | default('') | length == 0
+        - mnt_backups_stat.stat.exists | default(false)
+        - mnt_backups_stat.stat.isdir | default(false)
+
+    - name: Use latest /mnt/backups archive
+      ansible.builtin.set_fact:
+        chosen_backup: "{{ (mnt_backups_archives.files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
+      when:
+        - chosen_backup | default('') | length == 0
+        - (mnt_backups_archives.files | default([]) | length) > 0
     - name: Check local_backup_dir path type (dir/file)
       ansible.builtin.stat:
         path: "{{ local_backup_dir }}"
