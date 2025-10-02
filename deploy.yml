@@ -2,42 +2,5 @@
   hosts: vps
   become: true   # escalate privilege secara global
   tasks:
-    - name: Cleanup zero-downtime directories (if any)
-      ansible.builtin.file:
-        path: "/var/www/html/studendy/{{ item }}"
-        state: absent
-      loop:
-        - releases
-        - shared
-        - current
-
-    - name: Find backups older than 30 days
-      ansible.builtin.find:
-        paths: "/var/www/html/backups"
-        patterns: "studendy_*"
-        age: 30d
-        file_type: directory
-      register: old_backups
-
-    - name: Remove old backups (>30d)
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        state: absent
-      loop: "{{ old_backups.files }}"
-      when: old_backups.matched | default(0) | int > 0
-
-    - name: Verify Nginx root points to studendy public
-      ansible.builtin.shell: |
-        nginx -T 2>/dev/null | grep -E "root\s+/var/www/html/studendy(/current)?/public;" | sed -E 's/^\s+//g' || true
-      register: nginx_root
-      changed_when: false
-      failed_when: false
-
-    - name: Show Nginx root check result
-      ansible.builtin.debug:
-        msg: >-
-          {{ nginx_root.stdout_lines if (nginx_root.stdout | length > 0) else
-             'Nginx root tidak mengarah ke /var/www/html/studendy/public atau /current/public. Mohon periksa konfigurasi vhost dan reload nginx.' }}
-
     - name: Run advanced-deploy.sh from local
       ansible.builtin.script: ./advanced-deploy.sh
