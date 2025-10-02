@@ -16,6 +16,9 @@
     # Local backup folder (relative to repo in Semaphore/CI)
     # Use `-e local_backup_dir=/path` to override when needed.
     local_backup_dir: "{{ playbook_dir }}/backups"
+    # Optional: point directly to a single .tar.gz file
+    # Example: -e local_backup_file=/tmp/semaphore/project_1/repository_1_template_2/backups/studendy_20250101.tar.gz
+    local_backup_file: ""
     # No variables needed for backup; we will auto-pick latest .tar.gz
 
   tasks:
@@ -26,6 +29,7 @@
         mode: "0755"
       delegate_to: localhost
       become: false
+      when: (local_backup_file | default('')) | length == 0
 
     - name: Find local backups (*.tar.gz)
       ansible.builtin.find:
@@ -35,10 +39,28 @@
       register: local_archives
       delegate_to: localhost
       become: false
+      when: (local_backup_file | default('')) | length == 0
 
-    - name: Pick latest local backup
+    - name: Pick latest local backup (from directory)
       ansible.builtin.set_fact:
         chosen_backup: "{{ (local_archives.files | sort(attribute='mtime', reverse=True) | first).path | default('') }}"
+      when: (local_backup_file | default('')) | length == 0
+
+    - name: Validate provided local backup file
+      ansible.builtin.stat:
+        path: "{{ local_backup_file }}"
+      register: provided_backup
+      delegate_to: localhost
+      become: false
+      when: (local_backup_file | default('')) | length > 0
+
+    - name: Use provided local backup file
+      ansible.builtin.set_fact:
+        chosen_backup: "{{ local_backup_file }}"
+      when:
+        - (local_backup_file | default('')) | length > 0
+        - provided_backup.stat.exists
+        - not provided_backup.stat.isdir
 
     - name: Show chosen backup (may be empty for fresh deploy)
       ansible.builtin.debug:
@@ -46,7 +68,9 @@
 
     - name: Fail if no backup found in local folder
       ansible.builtin.fail:
-        msg: "No .tar.gz backup found in {{ local_backup_dir }}"
+        msg: >-
+          No backup found. Either local_backup_file is invalid/missing
+          or no .tar.gz exists in {{ local_backup_dir }}
       when: chosen_backup | length == 0
 
     - name: Set remote backup path
